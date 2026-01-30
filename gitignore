@@ -1,0 +1,86 @@
+# Logs and audit trails (keep on server, not in repo)
+*.log
+system-initializer.log
+system-initializer-report.txt
+/logs/
+
+# Backup directories (never commit backups)
+/backups/
+*.bak
+*.backup
+.*.bak
+.*.backup
+
+# System configuration files (server-specific, not portable)
+/etc/
+.env
+.env.local
+*.key
+*.pem
+*.crt
+*.der
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vim/
+.emacs.d/
+
+# OS-specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+
+# Credentials and secrets
+*.secret
+*.passwd
+*.password
+.ssh/
+.aws/
+.azure/
+.gcp/
+
+# Build artifacts (if building distribution)
+/dist/
+/build/
+*.tar.gz
+*.tar.bz2
+*.zip
+
+# Package manager cache
+node_modules/
+__pycache__/
+*.pyc
+.pip-cache/
+/vendor/
+
+# Version control metadata
+.git/
+.gitignore
+.github/
+.gitlab/
+
+# CI/CD
+.github/workflows/
+.gitlab-ci.yml
+Jenkinsfile
+
+# Testing
+/tests/coverage/
+*.coverage
+.pytest_cache/

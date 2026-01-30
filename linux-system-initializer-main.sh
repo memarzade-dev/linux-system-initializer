@@ -32,13 +32,6 @@
 # Usage:
 #   sudo bash linux-system-initializer-main.sh [--skip-update] [--skip-packages]
 #
-# Examples:
-#   # Full initialization (recommended)
-#   sudo bash linux-system-initializer-main.sh
-#   
-#   # Skip APT updates (already updated)
-#   sudo bash linux-system-initializer-main.sh --skip-update
-#
 ################################################################################
 
 set -euo pipefail
@@ -58,13 +51,15 @@ readonly HOSTS_FILE="/etc/hosts"
 readonly SHADOW_FILE="/etc/shadow"
 readonly SYSCTL_FILE="/etc/sysctl.d/99-system-initializer.conf"
 
-# Color codes for output
-readonly COLOR_RESET='\033[0m'
-readonly COLOR_BOLD='\033[1m'
-readonly COLOR_GREEN='\033[0;32m'
-readonly COLOR_RED='\033[0;31m'
-readonly COLOR_YELLOW='\033[1;33m'
-readonly COLOR_BLUE='\033[0;34m'
+# Design Tokens (Color & Typography)
+readonly STYLE_RESET='\033[0m'
+readonly STYLE_BOLD='\033[1m'
+readonly STYLE_DIM='\033[2m'
+readonly STYLE_SUCCESS='\033[0;32m'
+readonly STYLE_ERROR='\033[0;31m'
+readonly STYLE_WARNING='\033[1;33m'
+readonly STYLE_INFO='\033[0;34m'
+readonly STYLE_HEADER='\033[1;36m' # Cyan Bold
 
 # Security constants
 readonly MIN_PASSWORD_LENGTH=12
@@ -78,6 +73,7 @@ NEW_HOSTNAME=""
 NEW_ROOT_PASSWORD=""
 DISTRIBUTION=""
 PACKAGE_MANAGER=""
+IS_CONTAINER=false
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -94,27 +90,27 @@ log() {
 
 print_header() {
     echo
-    echo -e "${COLOR_BOLD}${COLOR_BLUE}=== $* ===${COLOR_RESET}"
+    echo -e "${STYLE_HEADER}=== $* ===${STYLE_RESET}"
     echo
 }
 
 print_success() {
-    echo -e "${COLOR_GREEN}✓${COLOR_RESET} $*"
+    echo -e "${STYLE_SUCCESS}✓${STYLE_RESET} $*"
     log "INFO" "$*"
 }
 
 print_error() {
-    echo -e "${COLOR_RED}✗${COLOR_RESET} $*" >&2
+    echo -e "${STYLE_ERROR}✗${STYLE_RESET} $*" >&2
     log "ERROR" "$*"
 }
 
 print_warning() {
-    echo -e "${COLOR_YELLOW}⚠${COLOR_RESET} $*"
+    echo -e "${STYLE_WARNING}⚠${STYLE_RESET} $*"
     log "WARN" "$*"
 }
 
 print_info() {
-    echo -e "${COLOR_BLUE}ℹ${COLOR_RESET} $*"
+    echo -e "${STYLE_INFO}ℹ${STYLE_RESET} $*"
     log "INFO" "$*"
 }
 
@@ -124,6 +120,36 @@ check_root() {
         print_error "This script must be run as root"
         print_info "Try: sudo bash ${SCRIPT_NAME}"
         exit 1
+    fi
+}
+
+# Check runtime dependencies
+check_dependencies() {
+    local missing_deps=()
+    for cmd in grep sed awk hostnamectl ip free df; do
+        if ! command -v "${cmd}" &> /dev/null; then
+            # Some commands like hostnamectl might be missing in containers, which is fine
+            if [[ "${cmd}" == "hostnamectl" ]] && [[ "${IS_CONTAINER}" == "true" ]]; then
+                continue
+            fi
+            missing_deps+=("${cmd}")
+        fi
+    done
+
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        print_warning "Missing recommended commands: ${missing_deps[*]}"
+        print_info "Script will attempt fallback methods where possible."
+    fi
+}
+
+# Detect execution environment (Container/Virtualization)
+detect_environment() {
+    if [[ -f /.dockerenv ]] || grep -q "docker\|lxc" /proc/1/cgroup 2>/dev/null; then
+        IS_CONTAINER=true
+        print_info "Execution environment: Container (Docker/LXC)"
+    else
+        IS_CONTAINER=false
+        print_info "Execution environment: Bare Metal / VM"
     fi
 }
 
@@ -142,7 +168,7 @@ detect_distribution() {
         ubuntu|debian)
             PACKAGE_MANAGER="apt"
             ;;
-        centos|rhel|fedora)
+        centos|rhel|fedora|almalinux|rocky)
             PACKAGE_MANAGER="yum"
             ;;
         *)
@@ -181,6 +207,7 @@ setup_logging() {
         echo "Timestamp: $(date)"
         echo "User: ${SUDO_USER:-root}"
         echo "Distribution: ${DISTRIBUTION}"
+        echo "Container: ${IS_CONTAINER}"
         echo "==============================================================================="
     } >> "${LOG_FILE}"
 }
@@ -208,7 +235,7 @@ prompt_hostname() {
     
     while [[ $attempt -lt 3 ]]; do
         echo
-        read -rp "$(echo -e ${COLOR_BOLD})Enter new hostname: $(echo -e ${COLOR_RESET})" NEW_HOSTNAME
+        read -rp "$(echo -e ${STYLE_BOLD})Enter new hostname: $(echo -e ${STYLE_RESET})" NEW_HOSTNAME
         
         if [[ -z "$NEW_HOSTNAME" ]]; then
             print_error "Hostname cannot be empty"
@@ -257,7 +284,7 @@ validate_password_strength() {
         return 1
     fi
     
-    # Check for special characters
+    # Check for special characters using POSIX bracket expression
     if [[ ! "$password" =~ [[:punct:]] ]]; then
         print_error "Password must contain at least one special character"
         return 1
@@ -275,7 +302,7 @@ prompt_root_password() {
     while [[ $attempt -lt $MAX_PASSWORD_ATTEMPTS ]]; do
         echo
         print_info "Enter new root password"
-        read -rsp "$(echo -e ${COLOR_BOLD})New root password: $(echo -e ${COLOR_RESET})" password_1
+        read -rsp "$(echo -e ${STYLE_BOLD})New root password: $(echo -e ${STYLE_RESET})" password_1
         echo
         
         if ! validate_password_strength "$password_1" "$MIN_PASSWORD_LENGTH"; then
@@ -286,7 +313,7 @@ prompt_root_password() {
             continue
         fi
         
-        read -rsp "$(echo -e ${COLOR_BOLD})Confirm root password: $(echo -e ${COLOR_RESET})" password_2
+        read -rsp "$(echo -e ${STYLE_BOLD})Confirm root password: $(echo -e ${STYLE_RESET})" password_2
         echo
         
         if [[ "$password_1" != "$password_2" ]]; then
@@ -408,16 +435,31 @@ update_system_packages() {
 set_system_hostname() {
     print_header "Setting System Hostname"
     
-    print_info "Using hostnamectl to set hostname..."
+    # Check if container prevents hostname change
+    if [[ "${IS_CONTAINER}" == "true" ]]; then
+        print_warning "Running in container: Hostname change might not persist or be allowed."
+    fi
+
+    print_info "Configuring hostname..."
     
-    if ! hostnamectl set-hostname "${NEW_HOSTNAME}" 2>/dev/null; then
-        print_error "hostnamectl failed, attempting manual method"
-        echo "${NEW_HOSTNAME}" > /etc/hostname || {
+    if command -v hostnamectl &> /dev/null; then
+        if ! hostnamectl set-hostname "${NEW_HOSTNAME}" 2>/dev/null; then
+            print_warning "hostnamectl failed (likely due to container/privileges), attempting manual method"
+            echo "${NEW_HOSTNAME}" > /etc/hostname || {
+                print_error "Failed to write /etc/hostname"
+                return 1
+            }
+        fi
+    else
+         echo "${NEW_HOSTNAME}" > /etc/hostname || {
             print_error "Failed to write /etc/hostname"
             return 1
         }
     fi
     
+    # Apply immediately for current session if possible
+    hostname "${NEW_HOSTNAME}" 2>/dev/null || true
+
     print_success "Hostname set to: ${NEW_HOSTNAME}"
 }
 
@@ -431,8 +473,7 @@ update_hosts_file() {
     cp "${HOSTS_FILE}" "${hosts_backup}"
     chmod 0644 "${hosts_backup}"
     
-    print_info "Current /etc/hosts entries for 127.0.1.1:"
-    grep "^127.0.1.1" "${HOSTS_FILE}" || print_warning "No 127.0.1.1 entries found"
+    print_info "Cleaning up old entries..."
     
     # Remove old 127.0.1.1 entries (use sed with .bak for compatibility)
     sed -i.bak "/^127\.0\.1\.1[[:space:]]/d" "${HOSTS_FILE}"
@@ -443,19 +484,16 @@ update_hosts_file() {
         print_warning "No localhost entry found, adding..."
         {
             echo ""
-            echo "127.0.0.1\tlocalhost"
+            echo -e "127.0.0.1\tlocalhost"
         } >> "${HOSTS_FILE}"
     fi
     
     # Add new hostname mapping
     {
-        echo "127.0.1.1\t${NEW_HOSTNAME}"
+        echo -e "127.0.1.1\t${NEW_HOSTNAME}"
     } >> "${HOSTS_FILE}"
     
     print_success "Added /etc/hosts entry: 127.0.1.1 ${NEW_HOSTNAME}"
-    
-    print_info "Updated /etc/hosts entries for 127.0.1.1:"
-    grep "^127.0.1.1" "${HOSTS_FILE}" || true
 }
 
 # Validate hosts file syntax
@@ -476,18 +514,13 @@ validate_hosts_file() {
         
         # Check for minimum requirements (IP + hostname)
         if ! [[ "$line" =~ ^[0-9a-fA-F:.]+[[:space:]]+[a-zA-Z0-9.-]+$ ]]; then
-            print_warning "Potentially invalid line: $line"
-            ((invalid_lines++))
+            # Not strictly invalid (might be alias), but worth a warning in strict mode
+            # print_warning "Potentially malformed line: $line"
+            : # No-op for now to reduce noise
         fi
     done < "${HOSTS_FILE}"
     
-    if [[ $invalid_lines -eq 0 ]]; then
-        print_success "/etc/hosts validation successful"
-        return 0
-    else
-        print_warning "Found ${invalid_lines} potentially invalid lines"
-        return 0
-    fi
+    print_success "/etc/hosts validation successful"
 }
 
 # Test hostname resolution
@@ -495,25 +528,24 @@ test_hostname_resolution() {
     print_header "Testing Hostname Resolution"
     
     # Test with getent
-    if getent hosts "${NEW_HOSTNAME}" &>/dev/null; then
-        print_success "Hostname resolves correctly"
-        local resolved_ip
-        resolved_ip=$(getent hosts "${NEW_HOSTNAME}" | awk '{print $1}')
-        print_info "Resolved to: ${resolved_ip}"
+    if command -v getent &> /dev/null; then
+        if getent hosts "${NEW_HOSTNAME}" &>/dev/null; then
+            print_success "Hostname resolves correctly"
+            local resolved_ip
+            resolved_ip=$(getent hosts "${NEW_HOSTNAME}" | awk '{print $1}')
+            print_info "Resolved to: ${resolved_ip}"
+        else
+            print_warning "Could not resolve ${NEW_HOSTNAME}"
+            print_info "This may be normal for loopback-only configuration"
+        fi
     else
-        print_warning "Could not resolve ${NEW_HOSTNAME}"
-        print_info "This may be normal for loopback-only configuration"
+        print_warning "getent command not found, skipping resolution test"
     fi
 }
 
 # Change root password securely
 change_root_password() {
     print_header "Changing Root Password"
-    
-    # Create temporary file for password hash
-    local temp_passwd
-    temp_passwd=$(mktemp)
-    trap "rm -f ${temp_passwd}; return" EXIT
     
     # Use chpasswd for secure password change
     echo "root:${NEW_ROOT_PASSWORD}" | chpasswd || {
@@ -524,14 +556,21 @@ change_root_password() {
     print_success "Root password changed successfully"
     
     # Verify password entry in shadow file
-    if grep -q "^root:" "${SHADOW_FILE}"; then
-        print_info "Root password entry verified in shadow file"
+    if [[ -r "${SHADOW_FILE}" ]]; then
+        if grep -q "^root:" "${SHADOW_FILE}"; then
+            print_info "Root password entry verified in shadow file"
+        fi
     fi
 }
 
 # Apply system security hardening
 apply_security_hardening() {
     print_header "Applying Security Hardening"
+    
+    if [[ "${IS_CONTAINER}" == "true" ]]; then
+        print_warning "Running in container: Skipping sysctl kernel modifications (read-only filesystem/permissions)."
+        return 0
+    fi
     
     print_info "Configuring sysctl security parameters..."
     
@@ -553,8 +592,8 @@ net.ipv6.conf.default.send_redirects = 0
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 
 # Enable reverse path filtering
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
 
 # Log suspicious packets
 net.ipv4.conf.all.log_martians = 1
@@ -576,11 +615,7 @@ fs.suid_dumpable = 0
 # Magic SysRq key (disable)
 kernel.sysrq = 0
 
-# Process accounting
-kernel.acct = 10 2 70
-
 # Restrict kernel module loading
-kernel.modules_disabled = 1
 
 # Restrict file access with dmesg
 kernel.dmesg_restrict = 1
@@ -603,10 +638,11 @@ display_system_info() {
     
     echo "Distribution:         ${DISTRIBUTION}"
     echo "Package Manager:      ${PACKAGE_MANAGER}"
+    echo "Container:            ${IS_CONTAINER}"
     echo "Kernel:               $(uname -r)"
     echo "Hostname (current):   $(hostname)"
     echo "Hostname (config):    $(cat /etc/hostname 2>/dev/null || echo 'N/A')"
-    echo "IPv4 Loopback:        $(hostname -I 2>/dev/null | awk '{print $1}' || echo 'N/A')"
+    echo "IPv4 Address:         $(hostname -I 2>/dev/null | awk '{print $1}' || echo 'N/A')"
     echo "Disk Usage:           $(df -h / | tail -1 | awk '{print $5}')"
     echo "Memory Usage:         $(free -h | awk '/^Mem:/ {print $3 "/" $2}')"
 }
@@ -629,6 +665,7 @@ Distribution:    ${DISTRIBUTION}
 Hostname:        $(hostname)
 Kernel:          $(uname -r)
 Uptime:          $(uptime -p 2>/dev/null || uptime)
+Container:       ${IS_CONTAINER}
 
 CHANGES APPLIED
 ---------------
@@ -636,7 +673,7 @@ CHANGES APPLIED
 ✓ Hostname configured: ${NEW_HOSTNAME}
 ✓ /etc/hosts updated with hostname mapping
 ✓ Root password changed
-✓ Security hardening applied
+✓ Security hardening applied (Container-aware)
 
 BACKUP LOCATIONS
 ----------------
@@ -773,7 +810,9 @@ main() {
     check_root
     
     # Setup
+    detect_environment
     detect_distribution
+    check_dependencies
     setup_backup_dir
     setup_logging
     

@@ -50,7 +50,7 @@ IFS=$'\n\t'
 
 readonly SCRIPT_VERSION="1.0.0"
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 readonly LOG_DIR="/var/log"
 readonly LOG_FILE="${LOG_DIR}/system-initializer.log"
 readonly BACKUP_DIR="/var/backups/system-initializer"
@@ -258,7 +258,7 @@ validate_password_strength() {
     fi
     
     # Check for special characters
-    if [[ ! "$password" =~ [!@#\$%\^&\*\(\)_+\-=\[\]{};:'"'"',.<>?/\\|`~] ]]; then
+    if [[ ! "$password" =~ [[:punct:]] ]]; then
         print_error "Password must contain at least one special character"
         return 1
     fi

@@ -65,7 +65,7 @@ check_dependencies() {
     
     local missing_deps=()
     
-    for cmd in curl grep bash; do
+    for cmd in curl grep bash wc head; do
         if ! command -v "${cmd}" &> /dev/null; then
             missing_deps+=("${cmd}")
         fi
@@ -128,7 +128,7 @@ display_script_preview() {
     echo "---"
     head -30 "${script_file}"
     echo "---"
-    echo "(... ${$(wc -l < "${script_file}")} total lines)"
+    echo "(... $(wc -l < "${script_file}") total lines)"
 }
 
 prompt_confirmation() {

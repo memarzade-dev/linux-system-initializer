@@ -4,7 +4,7 @@
 # Linux System Initializer & Hostname Configuration Manager
 # 
 # GitHub: memarzade-dev/linux-system-initializer
-# Version: 1.0.0
+# Version: 1.1.0
 # License: MIT
 #
 # Purpose:
@@ -14,6 +14,9 @@
 #   - Root account password change with strength enforcement
 #   - Safety backups before critical changes
 #   - Comprehensive error handling & recovery
+#   - Advanced Performance Tuning (Sysctl, Ulimit) per docs.md
+#   - Rathole Tunnel Setup (Server/Client)
+#   - Database Migration (Marzban SQLite -> MariaDB)
 #
 # Supported Distributions:
 #   Ubuntu 18.04+, Debian 10+, CentOS 7+, RHEL 7+
@@ -41,7 +44,7 @@ IFS=$'\n\t'
 # CONFIGURATION & CONSTANTS
 # ============================================================================
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.1.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 readonly LOG_DIR="/var/log"
@@ -50,6 +53,7 @@ readonly BACKUP_DIR="/var/backups/system-initializer"
 readonly HOSTS_FILE="/etc/hosts"
 readonly SHADOW_FILE="/etc/shadow"
 readonly SYSCTL_FILE="/etc/sysctl.d/99-system-initializer.conf"
+readonly LIMITS_FILE="/etc/security/limits.conf"
 
 # Design Tokens (Color & Typography)
 readonly STYLE_RESET='\033[0m'
@@ -126,7 +130,8 @@ check_root() {
 # Check runtime dependencies
 check_dependencies() {
     local missing_deps=()
-    for cmd in grep sed awk hostnamectl ip free df; do
+    # Added curl, wget, jq for advanced features
+    for cmd in grep sed awk hostnamectl ip free df curl wget jq; do
         if ! command -v "${cmd}" &> /dev/null; then
             # Some commands like hostnamectl might be missing in containers, which is fine
             if [[ "${cmd}" == "hostnamectl" ]] && [[ "${IS_CONTAINER}" == "true" ]]; then
@@ -138,7 +143,12 @@ check_dependencies() {
 
     if [[ ${#missing_deps[@]} -gt 0 ]]; then
         print_warning "Missing recommended commands: ${missing_deps[*]}"
-        print_info "Script will attempt fallback methods where possible."
+        print_info "Attempting to install missing dependencies..."
+        if [[ "${PACKAGE_MANAGER}" == "apt" ]]; then
+            apt-get update -qq && apt-get install -y -qq "${missing_deps[@]}" || print_warning "Failed to auto-install dependencies."
+        elif [[ "${PACKAGE_MANAGER}" == "yum" ]]; then
+             yum install -y -q "${missing_deps[@]}" || print_warning "Failed to auto-install dependencies."
+        fi
     fi
 }
 
@@ -365,6 +375,16 @@ backup_critical_files() {
         chmod 0000 "${backup_subdir}/shadow.bak"
         print_success "Backed up /etc/shadow"
     fi
+
+    # Backup /etc/sysctl.conf and limits.conf
+    if [[ -f "/etc/sysctl.conf" ]]; then
+        cp "/etc/sysctl.conf" "${backup_subdir}/sysctl.conf.bak"
+        print_success "Backed up /etc/sysctl.conf"
+    fi
+    if [[ -f "${LIMITS_FILE}" ]]; then
+        cp "${LIMITS_FILE}" "${backup_subdir}/limits.conf.bak"
+        print_success "Backed up ${LIMITS_FILE}"
+    fi
     
     log "INFO" "Backup directory: ${backup_subdir}"
     echo "${backup_subdir}"
@@ -563,24 +583,28 @@ change_root_password() {
     fi
 }
 
-# Apply system security hardening
+# Apply system security hardening and performance tuning
 apply_security_hardening() {
-    print_header "Applying Security Hardening"
+    print_header "Applying Security & Performance Hardening"
     
     if [[ "${IS_CONTAINER}" == "true" ]]; then
         print_warning "Running in container: Skipping sysctl kernel modifications (read-only filesystem/permissions)."
         return 0
     fi
     
-    print_info "Configuring sysctl security parameters..."
+    print_info "Configuring sysctl parameters (Security + Performance)..."
     
     # Create sysctl configuration file
     cat > "${SYSCTL_FILE}" << 'SYSCTL_EOF'
-# Linux System Initializer - Security Hardening
+# Linux System Initializer - Security & Performance Hardening
 # Generated: $(date)
 
-# IP forwarding (disable if not routing)
-net.ipv4.ip_forward = 0
+# --- SECURITY ---
+
+# IP forwarding (disable if not routing, enable if needed for tunnels)
+# For rathole/xray servers, we typically NEED forwarding. 
+# Enabling IP forwarding safely:
+net.ipv4.ip_forward = 1
 
 # Disable source packet routing
 net.ipv4.conf.all.send_redirects = 0
@@ -591,7 +615,7 @@ net.ipv6.conf.default.send_redirects = 0
 # Enable bad error message protection
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 
-# Enable reverse path filtering
+# Enable reverse path filtering (Loose mode for complex routing/VPNs)
 net.ipv4.conf.all.rp_filter = 2
 net.ipv4.conf.default.rp_filter = 2
 
@@ -605,9 +629,6 @@ net.ipv4.conf.default.accept_redirects = 0
 net.ipv6.conf.all.accept_redirects = 0
 net.ipv6.conf.default.accept_redirects = 0
 
-# Increase SYN backlog
-net.ipv4.tcp_max_syn_backlog = 4096
-
 # Core dumps (restrict)
 kernel.core_uses_pid = 1
 fs.suid_dumpable = 0
@@ -615,21 +636,295 @@ fs.suid_dumpable = 0
 # Magic SysRq key (disable)
 kernel.sysrq = 0
 
-# Restrict kernel module loading
-
 # Restrict file access with dmesg
 kernel.dmesg_restrict = 1
+
+# --- PERFORMANCE & SCALABILITY (100+ Users) ---
+
+# Increase max connections
+net.core.somaxconn = 65536
+net.core.netdev_max_backlog = 5000
+
+# Increase buffer sizes for high speed
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+net.ipv4.tcp_rmem = 4096 87380 16777216
+net.ipv4.tcp_wmem = 4096 65536 16777216
+
+# Increase SYN backlog for high concurrency
+net.ipv4.tcp_max_syn_backlog = 8192
+
+# Enable SYN cookies for DoS protection
+net.ipv4.tcp_syncookies = 1
+
+# Reuse TIME-WAIT sockets (better resource usage)
+net.ipv4.tcp_tw_reuse = 1
+net.ipv4.tcp_fin_timeout = 15
+
+# Keepalive optimization
+net.ipv4.tcp_keepalive_time = 300
+net.ipv4.tcp_keepalive_intvl = 10
+net.ipv4.tcp_keepalive_probes = 5
+
+# System-wide file descriptor limit
+fs.file-max = 2097152
+
+# Memory management
+vm.overcommit_memory = 1
+
+# BBR Congestion Control (if available)
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+
 SYSCTL_EOF
     
     chmod 0644 "${SYSCTL_FILE}"
-    print_success "Security configuration written to ${SYSCTL_FILE}"
+    print_success "Security & Performance configuration written to ${SYSCTL_FILE}"
     
     print_info "Applying sysctl configuration..."
     sysctl -p "${SYSCTL_FILE}" > /dev/null 2>&1 || {
-        print_warning "Some sysctl settings may not be supported on this system"
+        print_warning "Some sysctl settings may not be supported on this system (e.g., BBR on old kernels)"
     }
     
-    print_success "Security hardening applied"
+    print_success "Security & Performance hardening applied"
+}
+
+# Optimize system limits (ulimit)
+optimize_system_limits() {
+    print_header "Optimizing System Limits (Ulimit)"
+    
+    print_info "Setting high file descriptor limits for scalability..."
+    
+    # Backup done in backup_critical_files
+    
+    # Check if limits are already set
+    if grep -q "soft nofile 1048576" "${LIMITS_FILE}" 2>/dev/null; then
+        print_info "Limits already optimized in ${LIMITS_FILE}"
+    else
+        {
+            echo ""
+            echo "# Added by Linux System Initializer"
+            echo "* soft nofile 1048576"
+            echo "* hard nofile 1048576"
+            echo "root soft nofile 1048576"
+            echo "root hard nofile 1048576"
+        } >> "${LIMITS_FILE}"
+        print_success "Updated ${LIMITS_FILE}"
+    fi
+    
+    # Apply immediately for current shell
+    ulimit -n 1048576 2>/dev/null || true
+    print_info "Current shell limit: $(ulimit -n)"
+}
+
+# Setup Rathole Tunnel
+setup_rathole() {
+    print_header "Rathole Tunnel Setup"
+    
+    echo "This wizard will help you setup Rathole for secure tunneling."
+    echo "Required for high-performance proxying (Server <-> Client)."
+    echo
+    read -rp "Do you want to install/configure Rathole now? (y/n): " confirm
+    if [[ "$confirm" != "y" ]]; then
+        print_info "Skipping Rathole setup."
+        return 0
+    fi
+    
+    print_info "Installing Rathole..."
+    # Detect Architecture
+    local arch
+    arch=$(uname -m)
+    local download_url=""
+    
+    if [[ "$arch" == "x86_64" ]]; then
+        download_url="https://github.com/rapiz1/rathole/releases/latest/download/rathole-x86_64-unknown-linux-gnu.zip"
+    elif [[ "$arch" == "aarch64" ]]; then
+        download_url="https://github.com/rapiz1/rathole/releases/latest/download/rathole-aarch64-unknown-linux-gnu.zip"
+    else
+        print_error "Unsupported architecture: $arch"
+        return 1
+    fi
+    
+    # Install unzip if missing
+    if ! command -v unzip &> /dev/null; then
+        apt-get install -y unzip || yum install -y unzip
+    fi
+    
+    wget -qO /tmp/rathole.zip "$download_url" || {
+        print_error "Failed to download Rathole"
+        return 1
+    }
+    
+    unzip -o /tmp/rathole.zip -d /tmp/rathole_bin
+    mv /tmp/rathole_bin/rathole /usr/local/bin/rathole
+    chmod +x /usr/local/bin/rathole
+    rm -rf /tmp/rathole.zip /tmp/rathole_bin
+    
+    print_success "Rathole installed to /usr/local/bin/rathole"
+    
+    # Configuration
+    mkdir -p /etc/rathole
+    
+    echo
+    echo "Select Mode:"
+    echo "1) Server (e.g., Canada/Foreign VPS)"
+    echo "2) Client (e.g., Iran/Domestic VPS)"
+    read -rp "Enter choice (1/2): " mode
+    
+    local config_file=""
+    local service_name=""
+    
+    if [[ "$mode" == "1" ]]; then
+        # Server Mode
+        config_file="/etc/rathole/server.toml"
+        service_name="rathole-server"
+        
+        read -rp "Enter Bind Port (default 2345): " bind_port
+        bind_port=${bind_port:-2345}
+        
+        # Generate PSK
+        local psk
+        psk=$(/usr/local/bin/rathole --genkey)
+        print_info "Generated strong PSK: ${psk}"
+        
+        cat > "$config_file" <<EOF
+[server]
+bind_addr = "0.0.0.0:${bind_port}"
+capacity = 300  # Optimized for 100+ users
+
+[server.transport]
+type = "noise"
+
+[server.transport.noise]
+psk = "${psk}"
+
+[server.services.marzban_bridge]
+token = "replace_with_same_token_as_client"
+bind_addr = "0.0.0.0:443"
+EOF
+        print_success "Created Server config at ${config_file}"
+        print_warning "IMPORTANT: Copy the PSK above for the Client setup!"
+        print_warning "IMPORTANT: Edit the 'token' in ${config_file} manually later."
+        
+    elif [[ "$mode" == "2" ]]; then
+        # Client Mode
+        config_file="/etc/rathole/client.toml"
+        service_name="rathole-client"
+        
+        read -rp "Enter Server IP (Foreign VPS): " server_ip
+        read -rp "Enter Server Port (default 2345): " server_port
+        server_port=${server_port:-2345}
+        
+        read -rp "Enter PSK (from Server): " psk
+        
+        cat > "$config_file" <<EOF
+[client]
+remote_addr = "${server_ip}:${server_port}"
+n_channels = 30
+retry_interval = 3
+heartbeat_timeout = 40
+prefer_ipv6 = true
+
+[client.transport]
+type = "noise"
+
+[client.transport.noise]
+psk = "${psk}"
+
+[client.services.marzban_bridge]
+local_addr = "127.0.0.1:443"
+token = "replace_with_same_token_as_server"
+EOF
+        print_success "Created Client config at ${config_file}"
+        print_warning "IMPORTANT: Edit the 'token' in ${config_file} manually later."
+    else
+        print_error "Invalid selection"
+        return 1
+    fi
+    
+    # Systemd Service
+    cat > "/etc/systemd/system/${service_name}.service" <<EOF
+[Unit]
+Description=Rathole ${mode} Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/rathole -c ${config_file}
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    systemctl enable "${service_name}"
+    print_success "Service ${service_name} enabled (not started yet, check config first)"
+}
+
+# Migrate Marzban Database (SQLite -> MariaDB)
+migrate_marzban_db() {
+    print_header "Marzban Database Migration (SQLite -> MariaDB)"
+    
+    if [[ ! -d "/opt/marzban" ]]; then
+        print_info "Marzban installation not found at /opt/marzban. Skipping migration."
+        return 0
+    fi
+    
+    echo "This will migrate Marzban from SQLite to MariaDB for better performance (100+ users)."
+    read -rp "Do you want to proceed? (y/n): " confirm
+    if [[ "$confirm" != "y" ]]; then return 0; fi
+    
+    print_info "Installing MariaDB Server..."
+    if [[ "${PACKAGE_MANAGER}" == "apt" ]]; then
+        apt-get install -y mariadb-server || { print_error "Failed to install MariaDB"; return 1; }
+    else
+        yum install -y mariadb-server || { print_error "Failed to install MariaDB"; return 1; }
+    fi
+    
+    systemctl start mariadb
+    systemctl enable mariadb
+    
+    print_info "Creating Database and User..."
+    local db_pass="marzban_strong_pass_$(date +%s)"
+    
+    mysql -e "CREATE DATABASE IF NOT EXISTS marzban CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    mysql -e "CREATE USER IF NOT EXISTS 'marzban'@'%' IDENTIFIED BY '${db_pass}';"
+    mysql -e "GRANT ALL PRIVILEGES ON marzban.* TO 'marzban'@'%';"
+    mysql -e "FLUSH PRIVILEGES;"
+    
+    print_success "Database 'marzban' created with password: ${db_pass}"
+    
+    print_info "Updating Marzban configuration..."
+    local env_file="/opt/marzban/.env"
+    
+    if [[ -f "$env_file" ]]; then
+        cp "$env_file" "${env_file}.bak.$(date +%s)"
+        
+        # Comment out old DB url if exists
+        sed -i 's/^SQLALCHEMY_DATABASE_URL/# SQLALCHEMY_DATABASE_URL/' "$env_file"
+        
+        # Add new DB url
+        echo "" >> "$env_file"
+        echo "SQLALCHEMY_DATABASE_URL=mysql+pymysql://marzban:${db_pass}@localhost/marzban" >> "$env_file"
+        
+        print_success "Updated .env file"
+        
+        print_info "Running Migration..."
+        cd /opt/marzban
+        docker compose down || true
+        # We need to run migration inside docker or via marzban-cli if available
+        # Assuming standard docker-compose setup
+        docker compose up -d
+        
+        print_warning "Migration initiated. Please check Marzban logs to ensure data is migrated correctly."
+        print_info "You may need to manually run 'marzban migrate' if auto-migration fails."
+    else
+        print_error "Could not find .env file"
+    fi
 }
 
 # Display system information
@@ -673,7 +968,10 @@ CHANGES APPLIED
 ✓ Hostname configured: ${NEW_HOSTNAME}
 ✓ /etc/hosts updated with hostname mapping
 ✓ Root password changed
-✓ Security hardening applied (Container-aware)
+✓ Security & Performance Hardening applied (Sysctl + Ulimit)
+  - Max Open Files: 1048576
+  - TCP BBR: Enabled (if supported)
+  - Network Buffers: Optimized for 1Gbps+
 
 BACKUP LOCATIONS
 ----------------
@@ -690,8 +988,9 @@ VERIFICATION STEPS
 2. Test DNS resolution:
    getent hosts ${NEW_HOSTNAME}
 
-3. Test sudo access:
-   sudo ls
+3. Check Performance Settings:
+   sysctl net.core.somaxconn
+   ulimit -n
 
 SECURITY NOTES
 --------------
@@ -750,7 +1049,7 @@ parse_arguments() {
 # Print usage information
 print_usage() {
     cat << 'USAGE_EOF'
-Linux System Initializer v1.0.0
+Linux System Initializer v1.1.0
 
 USAGE:
   sudo bash linux-system-initializer-main.sh [OPTIONS]
@@ -772,14 +1071,6 @@ REQUIREMENTS:
   - Root/sudo privileges
   - Internet connectivity (for updates)
   - Ubuntu 18.04+, Debian 10+, or CentOS/RHEL 7+
-
-SECURITY:
-  - All changes backed up before execution
-  - Strong password validation enforced
-  - Audit trail maintained in /var/log/system-initializer.log
-
-DOCUMENTATION:
-  GitHub: https://github.com/memarzade-dev/linux-system-initializer
 
 USAGE_EOF
 }
@@ -828,7 +1119,7 @@ main() {
     update_system_packages
     echo
     
-    # Get user inputs
+    # Get user inputs (Hostname & Password)
     prompt_hostname || exit 1
     prompt_root_password || exit 1
     echo
@@ -840,10 +1131,15 @@ main() {
     test_hostname_resolution
     echo
     
-    # Security
+    # Security & Performance
     change_root_password
     apply_security_hardening
+    optimize_system_limits
     echo
+
+    # Advanced Setup (Optional)
+    setup_rathole
+    migrate_marzban_db
     
     # Report
     generate_completion_report

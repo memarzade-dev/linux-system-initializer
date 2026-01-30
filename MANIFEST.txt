@@ -532,7 +532,7 @@ sudo bash init.sh
 
 METHOD 2: GitHub Gist (One-liner)
 ───────────────────────────────────────────────────────────────────────────────
-curl -fsSL https://gist.githubusercontent.com/memarzade-dev/[GIST_ID]/raw | sudo bash
+curl -fsSL https://gist.githubusercontent.com/memarzade-dev/linux-system-initializer/raw | sudo bash
 
 METHOD 3: wget Alternative
 ───────────────────────────────────────────────────────────────────────────────

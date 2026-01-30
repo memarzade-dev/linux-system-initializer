@@ -135,7 +135,7 @@ sudo bash init.sh
 
 METHODE 2: GitHub Gist One-Liner (Nach Setup)
 ────────────────────────────────────────────────────────────────────────────
-curl -fsSL https://gist.githubusercontent.com/memarzade-dev/[GIST_ID]/raw | sudo bash
+curl -fsSL https://gist.githubusercontent.com/memarzade-dev/linux-system-initializer/raw | sudo bash
 
 METHODE 3: Git Clone
 ────────────────────────────────────────────────────────────────────────────
@@ -372,7 +372,7 @@ Example 3: Ansible Playbook Integration
 
 Example 4: Gist One-Liner (nach Setup)
 ────────────────────────────────────────────────────────────────────────────
-curl -fsSL https://gist.githubusercontent.com/memarzade-dev/[GIST_ID]/raw | sudo bash
+curl -fsSL https://gist.githubusercontent.com/memarzade-dev/linux-system-initializer/raw | sudo bash
 
 ================================================================================
 SUPPORT & RESOURCES

@@ -16,10 +16,10 @@
 
 ```bash
 # Using curl
-curl -fsSL https://gist.github.com/memarzade-dev/[GIST_ID]/raw | sudo bash
+curl -fsSL https://gist.github.com/memarzade-dev/linux-system-initializer/raw | sudo bash
 
 # Using wget
-wget -qO- https://gist.github.com/memarzade-dev/[GIST_ID]/raw | sudo bash
+wget -qO- https://gist.github.com/memarzade-dev/linux-system-initializer/raw | sudo bash
 ```
 
 ### Or: Manual Installation
